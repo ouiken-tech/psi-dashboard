@@ -6,16 +6,22 @@ export default function App() {
   const [itemMaster, setItemMaster] = useState([]);
   const [historyData, setHistoryData] = useState([]);
 
-  // ===== CSV読み込み =====
+  // ======================
+  // CSV読み込み（UTF-8統一）
+  // ======================
   const readFile = (e, setter, parser) => {
     const file = e.target.files[0];
     if (!file) return;
+
     const reader = new FileReader();
     reader.onload = (ev) => setter(parser(ev.target.result));
-    reader.readAsText(file, "Shift_JIS");
+
+    reader.readAsText(file, "UTF-8");
   };
 
-  // ===== パーサー =====
+  // ======================
+  // パーサー
+  // ======================
   const parseSales = (t) =>
     t.split("\n").map(l => {
       const c = l.split(/[\t,]/);
@@ -40,7 +46,9 @@ export default function App() {
       return { code: c[0], month: c[1], qty: Number(c[2]) || 0 };
     });
 
-  // ===== AI予測 =====
+  // ======================
+  // AI予測
+  // ======================
   const result = useMemo(() => {
     const map = {};
     const itemMap = {};
@@ -67,7 +75,8 @@ export default function App() {
       const hist = (histMap[code] || []).sort((a,b)=>b.month.localeCompare(a.month));
 
       const weights = [0.5, 0.3, 0.2];
-      let weighted = 0, totalW = 0;
+      let weighted = 0;
+      let totalW = 0;
 
       hist.slice(0,3).forEach((h,i)=>{
         weighted += h.qty * (weights[i] || 0);
@@ -110,17 +119,19 @@ export default function App() {
     });
   }, [salesData, stockData, itemMaster, historyData]);
 
-  // ===== KPI =====
-  const kpi = useMemo(() => {
-    return {
-      totalSales: result.reduce((s,r)=>s+r.sales,0),
-      totalStock: result.reduce((s,r)=>s+r.stock,0),
-      totalOrder: result.reduce((s,r)=>s+r.order,0),
-      risk: result.filter(r=>r.order>20).length
-    };
-  }, [result]);
+  // ======================
+  // KPI
+  // ======================
+  const kpi = useMemo(() => ({
+    totalSales: result.reduce((s,r)=>s+r.sales,0),
+    totalStock: result.reduce((s,r)=>s+r.stock,0),
+    totalOrder: result.reduce((s,r)=>s+r.order,0),
+    risk: result.filter(r=>r.order>20).length
+  }), [result]);
 
-  // ===== カテゴリ =====
+  // ======================
+  // カテゴリ
+  // ======================
   const category = useMemo(() => {
     const map = {};
     result.forEach(r=>{
@@ -139,70 +150,88 @@ export default function App() {
     return "安定";
   };
 
-  // ===== CSVダウンロード =====
-  const downloadCSV = (name, header, rows) => {
-    const csv = [header, ...rows].map(r=>r.join(",")).join("\n");
-    const blob = new Blob([csv], {type:"text/csv"});
+  // ======================
+  // 🚀 Excel完全互換CSV出力
+  // ======================
+  const exportExcelCSV = (filename, header, rows) => {
+    const escape = (v) => {
+      if (v == null) return "";
+      const s = String(v);
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+
+    const csv =
+      [header, ...rows]
+        .map(r => r.map(escape).join(","))
+        .join("\r\n");
+
+    const bom = "\uFEFF"; // Excel対策（最重要）
+    const blob = new Blob([bom + csv], {
+      type: "text/csv;charset=utf-8;"
+    });
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = name;
+    a.download = filename;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
   };
 
-  const salesTpl = () =>
-    downloadCSV("sales.csv",
+  // ======================
+  // テンプレDL
+  // ======================
+  const downloadSales = () =>
+    exportExcelCSV("sales.csv",
       ["code","date","qty"],
-      [["A001","2026-01-01","10"]]
+      [["A001","2026-01-01",10]]
     );
 
-  const stockTpl = () =>
-    downloadCSV("stock.csv",
+  const downloadStock = () =>
+    exportExcelCSV("stock.csv",
       ["code","stock"],
-      [["A001","100"]]
+      [["A001",100]]
     );
 
-  const itemTpl = () =>
-    downloadCSV("item.csv",
+  const downloadItem = () =>
+    exportExcelCSV("item.csv",
       ["code","name","category"],
       [["A001","商品A","食品"]]
     );
 
-  const historyTpl = () =>
-    downloadCSV("history.csv",
+  const downloadHistory = () =>
+    exportExcelCSV("history.csv",
       ["code","month","qty"],
-      [["A001","2025-12","120"]]
+      [["A001","2025-12",120]]
     );
 
   return (
     <div style={styles.page}>
       <h2>📊 AI発注ダッシュボード</h2>
 
-      {/* CSV UPLOAD */}
       <div style={styles.card}>
         <p>販売CSV</p>
-        <input onChange={e=>readFile(e,setSalesData,parseSales)} type="file"/>
+        <input type="file" onChange={e=>readFile(e,setSalesData,parseSales)} />
 
         <p>在庫CSV</p>
-        <input onChange={e=>readFile(e,setStockData,parseStock)} type="file"/>
+        <input type="file" onChange={e=>readFile(e,setStockData,parseStock)} />
 
         <p>商品マスタ</p>
-        <input onChange={e=>readFile(e,setItemMaster,parseItem)} type="file"/>
+        <input type="file" onChange={e=>readFile(e,setItemMaster,parseItem)} />
 
         <p>履歴</p>
-        <input onChange={e=>readFile(e,setHistoryData,parseHistory)} type="file"/>
+        <input type="file" onChange={e=>readFile(e,setHistoryData,parseHistory)} />
       </div>
 
-      {/* CSV TEMPLATE */}
       <div style={styles.card}>
-        <h3>📥 テンプレDL</h3>
-        <button onClick={salesTpl}>販売CSV</button>
-        <button onClick={stockTpl}>在庫CSV</button>
-        <button onClick={itemTpl}>商品マスタ</button>
-        <button onClick={historyTpl}>履歴CSV</button>
+        <h3>📥 ExcelテンプレDL</h3>
+        <button onClick={downloadSales}>販売CSV</button>
+        <button onClick={downloadStock}>在庫CSV</button>
+        <button onClick={downloadItem}>商品マスタ</button>
+        <button onClick={downloadHistory}>履歴CSV</button>
       </div>
 
-      {/* KPI */}
       <div style={styles.grid}>
         <div style={styles.card}>売上<br/><b>{kpi.totalSales}</b></div>
         <div style={styles.card}>在庫<br/><b>{kpi.totalStock}</b></div>
@@ -210,7 +239,6 @@ export default function App() {
         <div style={{...styles.card,color:"#ff4d4f"}}>リスク<br/><b>{kpi.risk}</b></div>
       </div>
 
-      {/* CATEGORY */}
       <div style={styles.card}>
         <h3>🏬 カテゴリ</h3>
         {Object.entries(category).map(([k,v])=>(
@@ -221,7 +249,6 @@ export default function App() {
         ))}
       </div>
 
-      {/* ITEMS */}
       <div style={styles.grid2}>
         {result.map((r,i)=>(
           <div key={i} style={styles.card}>
@@ -237,6 +264,7 @@ export default function App() {
   );
 }
 
+// ===== STYLE =====
 const styles = {
   page:{padding:20,background:"#0b0f1a",color:"#fff",minHeight:"100vh"},
   card:{background:"rgba(255,255,255,0.06)",padding:16,borderRadius:16,marginBottom:12},
