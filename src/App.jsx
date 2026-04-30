@@ -1,20 +1,18 @@
 import React, { useState, useMemo } from "react";
 
 export default function App() {
-  // =========================
-  // 🧱 Core DB（唯一の正）
-  // =========================
+  // =====================
+  // 🧱 Core DB
+  // =====================
   const [db, setDb] = useState({
     products: [],
     stores: [],
-    sales: [],
-    stock: [],
-    history: []
+    sales: []
   });
 
-  // =========================
-  // 🔁 データ注入
-  // =========================
+  // =====================
+  // 🔁 Ingest
+  // =====================
   const ingest = (type, data) => {
     setDb(prev => ({
       ...prev,
@@ -22,9 +20,9 @@ export default function App() {
     }));
   };
 
-  // =========================
-  // 📥 CSV読み込み
-  // =========================
+  // =====================
+  // 📥 CSV reader
+  // =====================
   const readFile = (e, type, parser) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -38,142 +36,152 @@ export default function App() {
     reader.readAsText(file, "UTF-8");
   };
 
-  // =========================
-  // 🔧 パーサー
-  // =========================
-  const parseSales = (t) =>
-    t.split("\n").map(l => l.split(/[\t,]/));
-
-  const parseStock = (t) =>
-    t.split("\n").map(l => {
-      const c = l.split(/[\t,]/);
-      return {
-        code: c[0],
-        store: c[1],
-        qty: Number(c[2]) || 0
-      };
-    });
-
-  const parseProduct = (t) =>
-    t.split("\n").map(l => l.split(/[\t,]/));
-
-  const parseStore = (t) =>
-    t.split("\n").map(l => {
-      const c = l.split(/[\t,]/);
-      return {
-        storeId: c[2],
-        storeName: c[3]
-      };
-    });
-
-  // =========================
-  // 🧠 正規化レイヤー
-  // =========================
-  const normalize = {
-    product: (p) => ({
-      code: p[4],
-      name: p[5],
-      major: p[0],
-      middle: p[1],
-      cost: Number(p[12] || 0),
-      price: Number(p[11] || 0)
-    }),
-
-    sales: (s) => ({
-      code: s[7],
-      store: s[2],
-      date: s[3],
-      qty: Number(s[9] || 0),
-      price: Number(s[11] || 0),
-      cost: Number(s[10] || 0)
-    }),
-
-    store: (s) => ({
-      storeId: s.storeId,
-      storeName: s.storeName
-    }),
-
-    stock: (s) => ({
-      code: s.code,
-      store: s.store,
-      qty: Number(s.qty || 0)
-    })
+  // =====================
+  // 🧠 KEY NORMALIZER（重要）
+  // =====================
+  const normalizeCode = (code) => {
+    if (!code) return "";
+    return code.split("-")[0].trim(); // ★ここが核心
   };
 
-  // =========================
-  // 🧱 正規化DB
-  // =========================
-  const normalizedDB = useMemo(() => {
-    return {
-      products: db.products.map(normalize.product),
-      sales: db.sales.map(normalize.sales),
-      stock: db.stock.map(normalize.stock),
-      stores: db.stores.map(normalize.store),
-      history: db.history
-    };
-  }, [db]);
+  const normalizeStore = (store) => {
+    if (!store) return "";
+    return store.trim();
+  };
 
-  // =========================
-  // 🔗 JOINエンジン
-  // =========================
+  // =====================
+  // 🔧 Parsers
+  // =====================
+  const parseSales = (t) =>
+    t.split("\n").map(l => {
+      const c = l.split(/[\t,]/);
+
+      return {
+        code: normalizeCode(c[0]),   // P0001-001 → P0001
+        store: normalizeStore(c[1]),
+        qty: Number(c[2]) || 0,
+        price: Number(c[3]) || 0
+      };
+    });
+
+  const parseProducts = (t) =>
+    t.split("\n").map(l => {
+      const c = l.split(/[\t,]/);
+
+      return {
+        code: normalizeCode(c[0]),
+        name: c[1] || c[5] || "",
+        cost: Number(c[2]) || 0,
+        price: Number(c[3]) || 0
+      };
+    });
+
+  const parseStores = (t) =>
+    t.split("\n").map(l => {
+      const c = l.split(/[\t,]/);
+
+      return {
+        storeId: normalizeStore(c[0]),
+        storeName: c[1] || c[3]
+      };
+    });
+
+  // =====================
+  // 🧱 JOIN ENGINE（壊れない版）
+  // =====================
   const joined = useMemo(() => {
     const productMap = new Map(
-      normalizedDB.products.map(p => [p.code, p])
+      db.products.map(p => [p.code, p])
     );
 
     const storeMap = new Map(
-      normalizedDB.stores.map(s => [s.storeId, s])
+      db.stores.map(s => [s.storeId, s])
     );
 
-    return normalizedDB.sales.map(s => ({
-      ...s,
-      product: productMap.get(s.code),
-      store: storeMap.get(s.store)
-    }));
-  }, [normalizedDB]);
+    return db.sales.map(s => {
+      const product = productMap.get(s.code);
+      const store = storeMap.get(s.store);
 
-  // =========================
-  // 📊 KPIエンジン
-  // =========================
+      return {
+        ...s,
+        product,
+        store,
+        revenue: s.qty * s.price,
+        profit: (s.price - (product?.cost || 0)) * s.qty
+      };
+    });
+  }, [db]);
+
+  // =====================
+  // 📊 KPI ENGINE
+  // =====================
   const kpi = useMemo(() => {
-    const totalSales = normalizedDB.sales.reduce(
-      (sum, s) => sum + s.qty * s.price,
-      0
-    );
+    const totalSales = joined.reduce((a,b)=>a + b.revenue, 0);
+    const totalProfit = joined.reduce((a,b)=>a + b.profit, 0);
+    const totalQty = joined.reduce((a,b)=>a + b.qty, 0);
 
-    const totalProfit = normalizedDB.sales.reduce(
-      (sum, s) => sum + (s.price - s.cost) * s.qty,
-      0
-    );
+    return { totalSales, totalProfit, totalQty };
+  }, [joined]);
 
-    const totalStock = normalizedDB.stock.reduce(
-      (sum, s) => sum + s.qty,
-      0
-    );
+  // =====================
+  // 📊 STORE VIEW
+  // =====================
+  const storeAgg = useMemo(() => {
+    const map = {};
 
-    return { totalSales, totalProfit, totalStock };
-  }, [normalizedDB]);
+    joined.forEach(j => {
+      const key = j.store?.storeName || "不明";
 
-  // =========================
+      if (!map[key]) {
+        map[key] = { qty: 0, sales: 0, profit: 0 };
+      }
+
+      map[key].qty += j.qty;
+      map[key].sales += j.revenue;
+      map[key].profit += j.profit;
+    });
+
+    return map;
+  }, [joined]);
+
+  // =====================
+  // 📊 PRODUCT VIEW
+  // =====================
+  const productAgg = useMemo(() => {
+    const map = {};
+
+    joined.forEach(j => {
+      const key = j.product?.name || j.code;
+
+      if (!map[key]) {
+        map[key] = { qty: 0, sales: 0, profit: 0 };
+      }
+
+      map[key].qty += j.qty;
+      map[key].sales += j.revenue;
+      map[key].profit += j.profit;
+    });
+
+    return map;
+  }, [joined]);
+
+  // =====================
   // 🧪 UI
-  // =========================
+  // =====================
   return (
-    <div style={{ padding: 20, fontFamily: "sans-serif" }}>
-      <h2>📦 統合データエンジン（Core）</h2>
+    <div style={{ padding: 20 }}>
+      <h2>📦 データ統合エンジン（完成版）</h2>
 
       {/* INPUT */}
       <div>
         <p>販売データ</p>
-        <input type="file" onChange={e => readFile(e,"sales",parseSales)} />
-
-        <p>在庫データ</p>
-        <input type="file" onChange={e => readFile(e,"stock",parseStock)} />
+        <input onChange={e=>readFile(e,"sales",parseSales)} type="file" />
 
         <p>商品マスタ</p>
-        <input type="file" onChange={e => readFile(e,"products",parseProduct)} />
+        <input onChange={e=>readFile(e,"products",parseProducts)} type="file" />
 
         <p>店舗マスタ</p>
-        <input type="file" onChange={e => readFile(e,"stores",parseStore)} />
+        <input onChange={e=>readFile(e,"stores",parseStores)} type="file" />
       </div>
 
       {/* KPI */}
@@ -181,12 +189,32 @@ export default function App() {
         <h3>📊 KPI</h3>
         <p>売上: {kpi.totalSales}</p>
         <p>利益: {kpi.totalProfit}</p>
-        <p>在庫: {kpi.totalStock}</p>
+        <p>数量: {kpi.totalQty}</p>
       </div>
 
-      {/* JOIN確認 */}
+      {/* STORE */}
       <div style={{ marginTop: 20 }}>
-        <h3>🔗 JOIN結果（確認用）</h3>
+        <h3>🏬 店舗別</h3>
+        {Object.entries(storeAgg).map(([k,v])=>(
+          <div key={k}>
+            {k} / 売上:{v.sales} / 利益:{v.profit}
+          </div>
+        ))}
+      </div>
+
+      {/* PRODUCT */}
+      <div style={{ marginTop: 20 }}>
+        <h3>📦 商品別</h3>
+        {Object.entries(productAgg).map(([k,v])=>(
+          <div key={k}>
+            {k} / 売上:{v.sales} / 利益:{v.profit}
+          </div>
+        ))}
+      </div>
+
+      {/* JOIN DEBUG */}
+      <div style={{ marginTop: 20 }}>
+        <h3>🔗 JOIN確認</h3>
         <table border="1">
           <thead>
             <tr>
@@ -197,12 +225,12 @@ export default function App() {
             </tr>
           </thead>
           <tbody>
-            {joined.slice(0, 10).map((j, i) => (
+            {joined.slice(0,10).map((j,i)=>(
               <tr key={i}>
                 <td>{j.product?.name || j.code}</td>
                 <td>{j.store?.storeName || j.store}</td>
                 <td>{j.qty}</td>
-                <td>{j.qty * j.price}</td>
+                <td>{j.revenue}</td>
               </tr>
             ))}
           </tbody>
