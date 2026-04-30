@@ -1,275 +1,213 @@
 import React, { useState, useMemo } from "react";
 
 export default function App() {
-  const [salesData, setSalesData] = useState([]);
-  const [stockData, setStockData] = useState([]);
-  const [itemMaster, setItemMaster] = useState([]);
-  const [historyData, setHistoryData] = useState([]);
+  // =========================
+  // 🧱 Core DB（唯一の正）
+  // =========================
+  const [db, setDb] = useState({
+    products: [],
+    stores: [],
+    sales: [],
+    stock: [],
+    history: []
+  });
 
-  // ======================
-  // CSV読み込み（UTF-8統一）
-  // ======================
-  const readFile = (e, setter, parser) => {
+  // =========================
+  // 🔁 データ注入
+  // =========================
+  const ingest = (type, data) => {
+    setDb(prev => ({
+      ...prev,
+      [type]: data
+    }));
+  };
+
+  // =========================
+  // 📥 CSV読み込み
+  // =========================
+  const readFile = (e, type, parser) => {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (ev) => setter(parser(ev.target.result));
+    reader.onload = (ev) => {
+      const parsed = parser(ev.target.result);
+      ingest(type, parsed);
+    };
 
     reader.readAsText(file, "UTF-8");
   };
 
-  // ======================
-  // パーサー
-  // ======================
+  // =========================
+  // 🔧 パーサー
+  // =========================
   const parseSales = (t) =>
-    t.split("\n").map(l => {
-      const c = l.split(/[\t,]/);
-      return { code: c[7], qty: Number(c[9]) || 0 };
-    });
+    t.split("\n").map(l => l.split(/[\t,]/));
 
   const parseStock = (t) =>
     t.split("\n").map(l => {
       const c = l.split(/[\t,]/);
-      return { code: c[0], stock: Number(c[7]) || 0 };
-    });
-
-  const parseItem = (t) =>
-    t.split("\n").map(l => {
-      const c = l.split(/[\t,]/);
-      return { code: c[0], name: c[1], category: c[2] };
-    });
-
-  const parseHistory = (t) =>
-    t.split("\n").map(l => {
-      const c = l.split(/[\t,]/);
-      return { code: c[0], month: c[1], qty: Number(c[2]) || 0 };
-    });
-
-  // ======================
-  // AI予測
-  // ======================
-  const result = useMemo(() => {
-    const map = {};
-    const itemMap = {};
-    itemMaster.forEach(i => (itemMap[i.code] = i));
-
-    salesData.forEach(r => {
-      if (!map[r.code]) map[r.code] = { sales: 0, stock: 0 };
-      map[r.code].sales += r.qty;
-    });
-
-    stockData.forEach(r => {
-      if (!map[r.code]) map[r.code] = { sales: 0, stock: 0 };
-      map[r.code].stock += r.stock;
-    });
-
-    const histMap = {};
-    historyData.forEach(r => {
-      if (!histMap[r.code]) histMap[r.code] = [];
-      histMap[r.code].push(r);
-    });
-
-    return Object.keys(map).map(code => {
-      const item = map[code];
-      const hist = (histMap[code] || []).sort((a,b)=>b.month.localeCompare(a.month));
-
-      const weights = [0.5, 0.3, 0.2];
-      let weighted = 0;
-      let totalW = 0;
-
-      hist.slice(0,3).forEach((h,i)=>{
-        weighted += h.qty * (weights[i] || 0);
-        totalW += weights[i] || 0;
-      });
-
-      const wAvg = totalW ? weighted / totalW : item.sales;
-
-      let trend = 0;
-      if (hist.length >= 3) {
-        trend = (hist[0].qty - hist[2].qty) / 2;
-      }
-
-      let forecast = Math.max(0, Math.round(wAvg + trend));
-
-      let season = 1;
-      if (hist.length >= 6) {
-        const avg = hist.reduce((s,v)=>s+v.qty,0)/hist.length;
-        const recent = hist.slice(0,3).reduce((s,v)=>s+v.qty,0)/3;
-        season = avg ? recent/avg : 1;
-      }
-
-      forecast = Math.round(forecast * season);
-
-      const need = forecast * 3;
-      const safety = Math.round(forecast * 0.5);
-      const order = Math.max(0, Math.round(need + safety - item.stock));
-
       return {
-        code,
-        name: itemMap[code]?.name || code,
-        category: itemMap[code]?.category || "未分類",
-        stock: item.stock,
-        sales: item.sales,
-        forecast,
-        need,
-        safety,
-        order
+        code: c[0],
+        store: c[1],
+        qty: Number(c[2]) || 0
       };
     });
-  }, [salesData, stockData, itemMaster, historyData]);
 
-  // ======================
-  // KPI
-  // ======================
-  const kpi = useMemo(() => ({
-    totalSales: result.reduce((s,r)=>s+r.sales,0),
-    totalStock: result.reduce((s,r)=>s+r.stock,0),
-    totalOrder: result.reduce((s,r)=>s+r.order,0),
-    risk: result.filter(r=>r.order>20).length
-  }), [result]);
+  const parseProduct = (t) =>
+    t.split("\n").map(l => l.split(/[\t,]/));
 
-  // ======================
-  // カテゴリ
-  // ======================
-  const category = useMemo(() => {
-    const map = {};
-    result.forEach(r=>{
-      if(!map[r.category]) map[r.category]={sales:0,stock:0,order:0};
-      map[r.category].sales += r.sales;
-      map[r.category].stock += r.stock;
-      map[r.category].order += r.order;
+  const parseStore = (t) =>
+    t.split("\n").map(l => {
+      const c = l.split(/[\t,]/);
+      return {
+        storeId: c[2],
+        storeName: c[3]
+      };
     });
-    return map;
-  }, [result]);
 
-  const explain = (r) => {
-    if (r.order > 20) return "⚠ 発注必要";
-    if (r.forecast > r.sales * 1.5) return "📈 需要増";
-    if (r.stock > r.forecast * 3) return "📦 在庫過多";
-    return "安定";
+  // =========================
+  // 🧠 正規化レイヤー
+  // =========================
+  const normalize = {
+    product: (p) => ({
+      code: p[4],
+      name: p[5],
+      major: p[0],
+      middle: p[1],
+      cost: Number(p[12] || 0),
+      price: Number(p[11] || 0)
+    }),
+
+    sales: (s) => ({
+      code: s[7],
+      store: s[2],
+      date: s[3],
+      qty: Number(s[9] || 0),
+      price: Number(s[11] || 0),
+      cost: Number(s[10] || 0)
+    }),
+
+    store: (s) => ({
+      storeId: s.storeId,
+      storeName: s.storeName
+    }),
+
+    stock: (s) => ({
+      code: s.code,
+      store: s.store,
+      qty: Number(s.qty || 0)
+    })
   };
 
-  // ======================
-  // 🚀 Excel完全互換CSV出力
-  // ======================
-  const exportExcelCSV = (filename, header, rows) => {
-    const escape = (v) => {
-      if (v == null) return "";
-      const s = String(v);
-      return `"${s.replace(/"/g, '""')}"`;
+  // =========================
+  // 🧱 正規化DB
+  // =========================
+  const normalizedDB = useMemo(() => {
+    return {
+      products: db.products.map(normalize.product),
+      sales: db.sales.map(normalize.sales),
+      stock: db.stock.map(normalize.stock),
+      stores: db.stores.map(normalize.store),
+      history: db.history
     };
+  }, [db]);
 
-    const csv =
-      [header, ...rows]
-        .map(r => r.map(escape).join(","))
-        .join("\r\n");
-
-    const bom = "\uFEFF"; // Excel対策（最重要）
-    const blob = new Blob([bom + csv], {
-      type: "text/csv;charset=utf-8;"
-    });
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  };
-
-  // ======================
-  // テンプレDL
-  // ======================
-  const downloadSales = () =>
-    exportExcelCSV("sales.csv",
-      ["code","date","qty"],
-      [["A001","2026-01-01",10]]
+  // =========================
+  // 🔗 JOINエンジン
+  // =========================
+  const joined = useMemo(() => {
+    const productMap = new Map(
+      normalizedDB.products.map(p => [p.code, p])
     );
 
-  const downloadStock = () =>
-    exportExcelCSV("stock.csv",
-      ["code","stock"],
-      [["A001",100]]
+    const storeMap = new Map(
+      normalizedDB.stores.map(s => [s.storeId, s])
     );
 
-  const downloadItem = () =>
-    exportExcelCSV("item.csv",
-      ["code","name","category"],
-      [["A001","商品A","食品"]]
+    return normalizedDB.sales.map(s => ({
+      ...s,
+      product: productMap.get(s.code),
+      store: storeMap.get(s.store)
+    }));
+  }, [normalizedDB]);
+
+  // =========================
+  // 📊 KPIエンジン
+  // =========================
+  const kpi = useMemo(() => {
+    const totalSales = normalizedDB.sales.reduce(
+      (sum, s) => sum + s.qty * s.price,
+      0
     );
 
-  const downloadHistory = () =>
-    exportExcelCSV("history.csv",
-      ["code","month","qty"],
-      [["A001","2025-12",120]]
+    const totalProfit = normalizedDB.sales.reduce(
+      (sum, s) => sum + (s.price - s.cost) * s.qty,
+      0
     );
 
+    const totalStock = normalizedDB.stock.reduce(
+      (sum, s) => sum + s.qty,
+      0
+    );
+
+    return { totalSales, totalProfit, totalStock };
+  }, [normalizedDB]);
+
+  // =========================
+  // 🧪 UI
+  // =========================
   return (
-    <div style={styles.page}>
-      <h2>📊 AI発注ダッシュボード</h2>
+    <div style={{ padding: 20, fontFamily: "sans-serif" }}>
+      <h2>📦 統合データエンジン（Core）</h2>
 
-      <div style={styles.card}>
-        <p>販売CSV</p>
-        <input type="file" onChange={e=>readFile(e,setSalesData,parseSales)} />
+      {/* INPUT */}
+      <div>
+        <p>販売データ</p>
+        <input type="file" onChange={e => readFile(e,"sales",parseSales)} />
 
-        <p>在庫CSV</p>
-        <input type="file" onChange={e=>readFile(e,setStockData,parseStock)} />
+        <p>在庫データ</p>
+        <input type="file" onChange={e => readFile(e,"stock",parseStock)} />
 
         <p>商品マスタ</p>
-        <input type="file" onChange={e=>readFile(e,setItemMaster,parseItem)} />
+        <input type="file" onChange={e => readFile(e,"products",parseProduct)} />
 
-        <p>履歴</p>
-        <input type="file" onChange={e=>readFile(e,setHistoryData,parseHistory)} />
+        <p>店舗マスタ</p>
+        <input type="file" onChange={e => readFile(e,"stores",parseStore)} />
       </div>
 
-      <div style={styles.card}>
-        <h3>📥 ExcelテンプレDL</h3>
-        <button onClick={downloadSales}>販売CSV</button>
-        <button onClick={downloadStock}>在庫CSV</button>
-        <button onClick={downloadItem}>商品マスタ</button>
-        <button onClick={downloadHistory}>履歴CSV</button>
+      {/* KPI */}
+      <div style={{ marginTop: 20 }}>
+        <h3>📊 KPI</h3>
+        <p>売上: {kpi.totalSales}</p>
+        <p>利益: {kpi.totalProfit}</p>
+        <p>在庫: {kpi.totalStock}</p>
       </div>
 
-      <div style={styles.grid}>
-        <div style={styles.card}>売上<br/><b>{kpi.totalSales}</b></div>
-        <div style={styles.card}>在庫<br/><b>{kpi.totalStock}</b></div>
-        <div style={styles.card}>発注<br/><b>{kpi.totalOrder}</b></div>
-        <div style={{...styles.card,color:"#ff4d4f"}}>リスク<br/><b>{kpi.risk}</b></div>
-      </div>
-
-      <div style={styles.card}>
-        <h3>🏬 カテゴリ</h3>
-        {Object.entries(category).map(([k,v])=>(
-          <div key={k} style={styles.row}>
-            <span>{k}</span>
-            <span>{v.sales}/{v.stock}/{v.order}</span>
-          </div>
-        ))}
-      </div>
-
-      <div style={styles.grid2}>
-        {result.map((r,i)=>(
-          <div key={i} style={styles.card}>
-            <h4>{r.name}</h4>
-            <p>在庫:{r.stock}</p>
-            <p>予測:{r.forecast}</p>
-            <p>{explain(r)}</p>
-            {r.order>0 && <div style={styles.badge}>発注 {r.order}</div>}
-          </div>
-        ))}
+      {/* JOIN確認 */}
+      <div style={{ marginTop: 20 }}>
+        <h3>🔗 JOIN結果（確認用）</h3>
+        <table border="1">
+          <thead>
+            <tr>
+              <th>商品</th>
+              <th>店舗</th>
+              <th>数量</th>
+              <th>売上</th>
+            </tr>
+          </thead>
+          <tbody>
+            {joined.slice(0, 10).map((j, i) => (
+              <tr key={i}>
+                <td>{j.product?.name || j.code}</td>
+                <td>{j.store?.storeName || j.store}</td>
+                <td>{j.qty}</td>
+                <td>{j.qty * j.price}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
-
-// ===== STYLE =====
-const styles = {
-  page:{padding:20,background:"#0b0f1a",color:"#fff",minHeight:"100vh"},
-  card:{background:"rgba(255,255,255,0.06)",padding:16,borderRadius:16,marginBottom:12},
-  grid:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10},
-  grid2:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10},
-  row:{display:"flex",justifyContent:"space-between",padding:"6px 0"},
-  badge:{marginTop:10,background:"#ff4d4f",padding:"4px 10px",borderRadius:999}
-};
